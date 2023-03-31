@@ -4,7 +4,9 @@
 #define LED_COLS 16
 #define GAME_ROWS 7
 #define GAME_COLS 7
-#define NUM_BUTTONS 4
+#define NUM_BUTTONS 3
+
+#include <FastLED.h>
 
 enum Square {
   EMPTY,
@@ -24,9 +26,15 @@ struct Coordinate {
   }
 };
 
+CRGB LEDs[NUM_LEDS];
 Square grid[GAME_ROWS][GAME_COLS];
 Square bigGrid[LED_ROWS][LED_COLS];
+byte brightnessLevel = 1;
+
 const byte buttonPins[] = {3, 4, 5};
+const unsigned long debounceDelay = 200; // debounce time in milliseconds
+unsigned long lastDebounceTime = 0; // initializes a variable to store last debounce time
+
 byte placementCol = 3;
 bool p1Turn = true;
 
@@ -38,12 +46,14 @@ byte translateToBigCol(byte col) {
   return 1 + col * 2;
 }
 
-void printBoard() {
+int coordToLEDIndex(byte row, byte col) {
+  return row * LED_COLS + (row % 2 ? col : LED_COLS - 1 - col);
+}
 
+void printBoard() {
   for (int row = 0; row < LED_ROWS; ++row) {
     for (int col = 0; col < LED_COLS; ++col) {
       Square currentSquare = bigGrid[row][col];
-
       if ((col == 0 || col == LED_COLS - 1) && row > 1) {
         Serial.print("H ");
       } 
@@ -64,29 +74,37 @@ void printBoard() {
   Serial.println();
   Serial.println();
 
-  //     currentPosition.set(row, col);
-
-  //     if (snake.body[0].row() == currentPosition.row() && snake.body[0].col() == currentPosition.col()) {
-  //       // Snake's head
-  //       Serial.print("H ");
-  //     } else if (snake.occupiesPosition(currentPosition)) {
-  //       // Snake's body
-  //       Serial.print("S ");
-  //     } else if (food.row() == currentPosition.row() && food.col() == currentPosition.col()) {
-  //       // Food
-  //       Serial.print("F ");
-  //     } else {
-  //       // Empty cell
-  //       Serial.print(". ");
-  //     }
-  //   }
-  //   Serial.println(); // Move to the next row
-  // }
-  Serial.println(); // Add an extra line to separate board states
 }
 
+void updateBoard() {
+  for (int row = 0; row < LED_ROWS; ++row) {
+    for (int col = 0; col < LED_COLS; ++col) {
+      Square currentSquare = bigGrid[row][col];
+      int LEDIndex = coordToLEDIndex(row, col);
+
+      if ((col == 0 || col == LED_COLS - 1) && row > 1) {
+        LEDs[LEDIndex] = CRGB(0, 0, brightnessLevel);
+      } 
+      // else if ((col == translateToBigCol(placementCol) || col == translateToBigCol(placementCol) + 1) && row < 2) {
+      //   LEDs[LEDIndex] = p1Turn ? CRGB(6, 0, 0) : CRGB(3, 3, 0);
+      // }
+      else if (currentSquare == P1_TILE) {
+        LEDs[LEDIndex] = CRGB(2 * brightnessLevel, 0, 0);
+      } else if (currentSquare == P2_TILE) {
+        LEDs[LEDIndex] = CRGB(brightnessLevel, brightnessLevel, 0);
+      } else {
+        LEDs[LEDIndex] = CRGB(0, 0, 0);
+      }
+    }
+  }
+  FastLED.show();
+}
+
+
 void set(byte row, byte col, Square val) {
-  grid[row][col] = val;
+  if (row >= 0 && col >= 0) {
+    grid[row][col] = val;
+  }
   byte bigRow = translateToBigRow(row);
   byte bigCol = translateToBigCol(col);
   bigGrid[bigRow][bigCol] = val;
@@ -107,17 +125,21 @@ void initializeButtons(byte* buttonPins) {
 
 void setup() {
   // put your setup code here, to run once:
+  FastLED.addLeds<WS2812, LED_PIN, GRB>(LEDs, NUM_LEDS);
+  FastLED.setMaxPowerInVoltsAndMilliamps(5, 500);
+  FastLED.clear();
+
+
   Serial.begin(9600);
   Serial.println();
-  set(5, 1, P1_TILE);
-  set(6, 1, P2_TILE);
 
   //setup pin change interrupts
-  PCICR |= B00000100;
+  // PCICR |= B00000100;
   initializeButtons(buttonPins);
 
-  
-  printBoard();
+  // printBoard();
+  set(-1, placementCol, p1Turn ? P1_TILE : P2_TILE);
+  updateBoard();
 
 }
 
@@ -128,7 +150,11 @@ void drop(byte col)
 
   while (curRow != GAME_ROWS && grid[curRow][col] == EMPTY)
   {
+    set(curRow, col, p1Turn ? P1_TILE : P2_TILE);
+    set(curRow - 1, col, EMPTY);
+    updateBoard();
     curRow++;
+    delay(50);
     //timedelay
   }
   if (curRow > 0)
@@ -140,7 +166,8 @@ void drop(byte col)
 }
 
 void handleButtonPressed(byte pin) {
-
+  Serial.println("pressed");
+  byte oldPlacementCol = placementCol;
   switch (pin) {
     case 3:
       drop(placementCol);
@@ -153,26 +180,29 @@ void handleButtonPressed(byte pin) {
       break;
   }
 
-  printBoard();
+  set(-1, oldPlacementCol, EMPTY);
+  set(-1, placementCol, p1Turn ? P1_TILE : P2_TILE);
 
-
-
-
-  // if (newDirection != snake.direction) {
-  //   snake.direction = newDirection;
-  //   snake.directionLocked = true;
-  // }
+  // printBoard();
+  updateBoard();
 }
 
-ISR (PCINT2_vect) {
-  Serial.println("pressed");
+bool debounceCheck() {
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    lastDebounceTime = millis();
+    return true;
+  }
+  return false;
+}
+
+void loop() {
   for (int i = 0; i < NUM_BUTTONS; i++) {
-    if (digitalRead(buttonPins[i]) == LOW) {
+    if (digitalRead(buttonPins[i]) == LOW && debounceCheck()) {
       handleButtonPressed(buttonPins[i]);
+      break;
     }
   }
+  Serial.println(placementCol);
 }
-
-void loop() {}
 
 
